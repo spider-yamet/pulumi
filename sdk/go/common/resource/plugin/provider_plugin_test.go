@@ -666,6 +666,7 @@ func TestProvider_ConstructOptions(t *testing.T) {
 			// and are not affected by ConstructOptions.
 			tt.want.Project = "project"
 			tt.want.Stack = "stack"
+			tt.want.Organization = "organization"
 			tt.want.Type = "type"
 			tt.want.Name = "name"
 			tt.want.Config = make(map[string]string)
@@ -705,7 +706,11 @@ func TestProvider_ConstructOptions(t *testing.T) {
 
 			_, err = p.Construct(context.Background(),
 				ConstructRequest{
-					Info:    ConstructInfo{Project: "project", Stack: "stack"},
+					Info: ConstructInfo{
+						Project:      "project",
+						Stack:        "stack",
+						Organization: "organization",
+					},
 					Type:    "type",
 					Name:    "name",
 					Parent:  tt.parent,
@@ -719,6 +724,45 @@ func TestProvider_ConstructOptions(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestProvider_CallRequestIncludesOrganization(t *testing.T) {
+	t.Parallel()
+
+	var got *pulumirpc.CallRequest
+	client := &stubClient{
+		ConfigureF: func(req *pulumirpc.ConfigureRequest) (*pulumirpc.ConfigureResponse, error) {
+			return &pulumirpc.ConfigureResponse{
+				AcceptSecrets: true,
+			}, nil
+		},
+		CallF: func(req *pulumirpc.CallRequest) (*pulumirpc.CallResponse, error) {
+			got = req
+			return &pulumirpc.CallResponse{
+				Return: &structpb.Struct{Fields: map[string]*structpb.Value{}},
+			}, nil
+		},
+	}
+
+	p := NewProviderWithClient(newTestContext(t), "foo", client, false /* disablePreview */)
+
+	// Must configure before we can use Call.
+	_, err := p.Configure(context.Background(), ConfigureRequest{})
+	require.NoError(t, err, "configure failed")
+
+	_, err = p.Call(context.Background(), CallRequest{
+		Tok:  "pkg:index:fn",
+		Args: resource.PropertyMap{},
+		Info: CallInfo{
+			Project:      "project",
+			Stack:        "stack",
+			Organization: "organization",
+		},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, got, "Client.Call was not called")
+	assert.Equal(t, "organization", got.GetOrganization())
 }
 
 // This test detects a data race between Configure and Delete
@@ -810,6 +854,7 @@ type stubClient struct {
 
 	DiffConfigF    func(*pulumirpc.DiffRequest) (*pulumirpc.DiffResponse, error)
 	ConstructF     func(*pulumirpc.ConstructRequest) (*pulumirpc.ConstructResponse, error)
+	CallF          func(*pulumirpc.CallRequest) (*pulumirpc.CallResponse, error)
 	ConfigureF     func(*pulumirpc.ConfigureRequest) (*pulumirpc.ConfigureResponse, error)
 	CreateF        func(*pulumirpc.CreateRequest) (*pulumirpc.CreateResponse, error)
 	DeleteF        func(*pulumirpc.DeleteRequest) error
@@ -839,6 +884,17 @@ func (c *stubClient) Construct(
 		return f(req)
 	}
 	return c.ResourceProviderClient.Construct(ctx, req, opts...)
+}
+
+func (c *stubClient) Call(
+	ctx context.Context,
+	req *pulumirpc.CallRequest,
+	opts ...grpc.CallOption,
+) (*pulumirpc.CallResponse, error) {
+	if f := c.CallF; f != nil {
+		return f(req)
+	}
+	return c.ResourceProviderClient.Call(ctx, req, opts...)
 }
 
 func (c *stubClient) Configure(
