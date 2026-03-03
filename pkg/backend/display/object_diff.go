@@ -44,10 +44,21 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/util/contract"
 )
 
-// getIndent computes a step's parent indentation.
-func getIndent(step engine.StepEventMetadata, seen map[resource.URN]engine.StepEventMetadata) int {
+// getIndent computes a step's parent indentation from visible ancestors.
+func getIndent(
+	step engine.StepEventMetadata,
+	seen map[resource.URN]engine.StepEventMetadata,
+	displayed map[resource.URN]bool,
+) int {
 	indent := 0
 	for p := step.Res.Parent; p != ""; {
+		if !displayed[p] {
+			// Only indent through ancestors that were actually rendered. This avoids
+			// visually nesting a child under an unrelated preceding row when its
+			// immediate parent was filtered out (for example, hidden OpSame resources).
+			break
+		}
+
 		par, has := seen[p]
 		if !has {
 			// This can happen during deletes, since we delete children before parents.

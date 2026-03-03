@@ -710,6 +710,7 @@ func (display *ProgressDisplay) printResourceDiffs() {
 	wroteChangesHeader := false
 
 	seen := make(map[resource.URN]engine.StepEventMetadata)
+	displayed := make(map[resource.URN]bool)
 	eventRows := toResourceRows(display.eventUrnToResourceRow, display.opts.DeterministicOutput)
 	for _, row := range eventRows {
 		step := row.Step()
@@ -726,6 +727,7 @@ func (display *ProgressDisplay) printResourceDiffs() {
 			false,
 			display.action == apitype.UpdateKind(apitype.Refresh),
 			seen,
+			displayed,
 			display.opts,
 		)
 

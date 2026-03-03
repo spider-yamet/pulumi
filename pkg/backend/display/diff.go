@@ -70,6 +70,7 @@ func ShowDiffEvents(op string, events <-chan engine.Event, done chan<- bool, opt
 	}()
 
 	seen := make(map[resource.URN]engine.StepEventMetadata)
+	displayed := make(map[resource.URN]bool)
 
 	for {
 		select {
@@ -91,9 +92,9 @@ func ShowDiffEvents(op string, events <-chan engine.Event, done chan<- bool, opt
 			// When the event received is SummaryEvent we can safely use `resourcesErrored`
 			// as all resource events have finished at this point.
 			if event.Type != engine.SummaryEvent {
-				msg = RenderDiffEvent(event, 0, seen, opts)
+				msg = RenderDiffEvent(event, 0, seen, displayed, opts)
 			} else {
-				msg = RenderDiffEvent(event, resourcesErrored, seen, opts)
+				msg = RenderDiffEvent(event, resourcesErrored, seen, displayed, opts)
 			}
 
 			if msg != "" && out != nil {
@@ -108,7 +109,7 @@ func ShowDiffEvents(op string, events <-chan engine.Event, done chan<- bool, opt
 }
 
 func RenderDiffEvent(event engine.Event, resourcesErrored int,
-	seen map[resource.URN]engine.StepEventMetadata, opts Options,
+	seen map[resource.URN]engine.StepEventMetadata, displayed map[resource.URN]bool, opts Options,
 ) string {
 	switch event.Type {
 	case engine.CancelEvent:
@@ -143,9 +144,9 @@ func RenderDiffEvent(event engine.Event, resourcesErrored int,
 	case engine.ResourceOperationFailed:
 		return renderDiffResourceOperationFailedEvent(event.Payload().(engine.ResourceOperationFailedPayload), opts)
 	case engine.ResourceOutputsEvent:
-		return renderDiffResourceOutputsEvent(event.Payload().(engine.ResourceOutputsEventPayload), seen, opts)
+		return renderDiffResourceOutputsEvent(event.Payload().(engine.ResourceOutputsEventPayload), seen, displayed, opts)
 	case engine.ResourcePreEvent:
-		return renderDiffResourcePreEvent(event.Payload().(engine.ResourcePreEventPayload), seen, opts)
+		return renderDiffResourcePreEvent(event.Payload().(engine.ResourcePreEventPayload), seen, displayed, opts)
 	case engine.DiagEvent:
 		return renderDiffDiagEvent(event.Payload().(engine.DiagEventPayload), opts)
 	case engine.PolicyRemediationEvent:
@@ -413,9 +414,10 @@ func renderDiff(
 	metadata engine.StepEventMetadata,
 	planning, debug, refresh bool,
 	seen map[resource.URN]engine.StepEventMetadata,
+	displayed map[resource.URN]bool,
 	opts Options,
 ) {
-	indent := getIndent(metadata, seen)
+	indent := getIndent(metadata, seen, displayed)
 	summary := getResourcePropertiesSummary(metadata, indent)
 
 	var details string
@@ -439,6 +441,7 @@ func renderDiff(
 		}
 	}
 	fprintIgnoreError(out, opts.Color.Colorize(summary))
+	displayed[metadata.URN] = true
 	fprintIgnoreError(out, opts.Color.Colorize(details))
 	fprintIgnoreError(out, opts.Color.Colorize(colors.Reset))
 }
@@ -446,6 +449,7 @@ func renderDiff(
 func renderDiffResourcePreEvent(
 	payload engine.ResourcePreEventPayload,
 	seen map[resource.URN]engine.StepEventMetadata,
+	displayed map[resource.URN]bool,
 	opts Options,
 ) string {
 	seen[payload.Metadata.URN] = payload.Metadata
@@ -455,7 +459,7 @@ func renderDiffResourcePreEvent(
 
 	out := &bytes.Buffer{}
 	if shouldShow(payload.Metadata, opts) || isRootStack(payload.Metadata) {
-		renderDiff(out, payload.Metadata, payload.Planning, payload.Debug, false /* refresh */, seen, opts)
+		renderDiff(out, payload.Metadata, payload.Planning, payload.Debug, false /* refresh */, seen, displayed, opts)
 	}
 	return out.String()
 }
@@ -463,6 +467,7 @@ func renderDiffResourcePreEvent(
 func renderDiffResourceOutputsEvent(
 	payload engine.ResourceOutputsEventPayload,
 	seen map[resource.URN]engine.StepEventMetadata,
+	displayed map[resource.URN]bool,
 	opts Options,
 ) string {
 	out := &bytes.Buffer{}
@@ -488,7 +493,7 @@ func renderDiffResourceOutputsEvent(
 		// case, we will already be indicating a deletion and it doesn't make sense
 		// to display a diff that shows that we are deleting everything.
 		if payload.Metadata.Op == deploy.OpImport || (refresh && payload.Metadata.Op == deploy.OpUpdate) {
-			renderDiff(out, payload.Metadata, payload.Planning, payload.Debug, refresh, seen, opts)
+			renderDiff(out, payload.Metadata, payload.Planning, payload.Debug, refresh, seen, displayed, opts)
 			return out.String()
 		}
 
@@ -505,7 +510,7 @@ func renderDiffResourceOutputsEvent(
 		// * As with other `--show-sames`-related checks, we always display the root stack.
 		// * If we have been asked to suppress outputs (e.g., because they contain sensitive information), then we will not
 		//   display them.
-		indent := getIndent(payload.Metadata, seen)
+		indent := getIndent(payload.Metadata, seen, displayed)
 
 		text := getResourceOutputsPropertiesString(
 			payload.Metadata,
@@ -521,6 +526,7 @@ func renderDiffResourceOutputsEvent(
 			// We would not have rendered the summary yet in this case, so do it now.
 			summary := getResourcePropertiesSummary(payload.Metadata, indent)
 			fprintIgnoreError(out, opts.Color.Colorize(summary))
+			displayed[payload.Metadata.URN] = true
 		}
 
 		if !opts.SuppressOutputs && text != "" {
@@ -541,6 +547,7 @@ func CreateDiff(events []engine.Event, displayOpts Options) (string, error) {
 	buff := &bytes.Buffer{}
 
 	seen := make(map[resource.URN]engine.StepEventMetadata)
+	displayed := make(map[resource.URN]bool)
 	displayOpts.SummaryDiff = true
 
 	if displayOpts.Color == "" {
@@ -554,7 +561,7 @@ func CreateDiff(events []engine.Event, displayOpts Options) (string, error) {
 			continue
 		}
 
-		msg := RenderDiffEvent(e, 0, seen, displayOpts)
+		msg := RenderDiffEvent(e, 0, seen, displayed, displayOpts)
 		if msg == "" {
 			continue
 		}
